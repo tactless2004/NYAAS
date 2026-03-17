@@ -1,0 +1,3 @@
+[submodule "nyaas_api"]
+	path = nyaas_api
+	url = git@leytonmgh:tactless2004/nyaas_api.git
