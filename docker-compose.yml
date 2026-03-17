@@ -1,0 +1,86 @@
+---
+# Collector Service stack
+#
+# Usage:
+#   docker compose up --build
+#
+# Services:
+#   redis      — Message broker (Alpine, tiny footprint on Pi)
+#   collector  — I2C polling daemon; owns the SMBus and publishes to Redis
+#   api        — FastAPI HTTP service; consumes Redis Streams
+#
+# The collector and api services share a named volume (`sockets`) mounted at
+# /tmp so the Unix domain socket written by the Collector is visible to the
+# API Service. This satisfies the single-instance guard.
+#
+# I2C device passthrough is configured via .env:
+#   I2C_DEVICE   — host device path  (default: /dev/i2c-1)
+#   I2C_GID      — i2c group GID on the host (default: 998, standard Pi OS)
+#
+#   To find the right GID on your Pi:
+#     getent group i2c
+
+services:
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    platform: linux/arm64
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      collector-net:
+
+  # ── Collector Service ──────────────────────────────────────────────────────
+  collector:
+    build:
+      context: nyaas_collector
+      dockerfile: collector.Dockerfile
+    platform: linux/arm64
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      COLLECTOR_REDIS_URL: "redis://redis:6379"
+      COLLECTOR_SOCKET_PATH: "/tmp/collector.sock"
+    volumes:
+      - sockets:/tmp
+    privileged: true
+    networks:
+      collector-net:
+
+  # ── API Service ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: nyaas_api
+      dockerfile: api.Dockerfile
+    platform: linux/arm64
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      COLLECTOR_REDIS_URL: "redis://redis:6379"
+    volumes:
+      - sockets:/tmp
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      collector-net:
+
+# ── Shared resources ───────────────────────────────────────────────────────────
+volumes:
+  sockets:
+
+networks:
+  collector-net:
